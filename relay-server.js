@@ -55,6 +55,13 @@ const server = http.createServer((req, res) => {
 
   const path = req.url.split("?")[0];
 
+  // Health check — Render (and other hosts) ping "/" to verify the service is
+  // alive. Must return 200, otherwise the host marks it unhealthy and restarts
+  // it in a loop (which also wipes the in-memory store).
+  if ((req.method === "GET" || req.method === "HEAD") && path === "/") {
+    return send(res, 200, { app: "BarterNet-Relay", status: "ok", rooms: rooms.size });
+  }
+
   if (req.method === "GET" && path === "/ping") {
     prune();
     const room = getRoom(req.url);

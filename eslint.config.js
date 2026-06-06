@@ -60,11 +60,4 @@ export default [
     languageOptions: { globals: globals.node, sourceType: 'module' },
     rules: { ...js.configs.recommended.rules },
   },
-
-  // CommonJS relay server
-  {
-    files: ['relay-server.js'],
-    languageOptions: { globals: globals.node, sourceType: 'commonjs' },
-    rules: { ...js.configs.recommended.rules },
-  },
 ]

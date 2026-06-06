@@ -145,7 +145,7 @@ export default function Connect() {
             <div className="card bg-barter-surface text-xs text-barter-muted space-y-1">
               <p className="font-semibold text-barter-text">Online works anywhere on Earth</p>
               <p>A shared server is built in, so online mode works right away — everyone on the same <strong className="text-barter-text">room code</strong> syncs together over the internet, no setup needed.</p>
-              <p className="text-barter-muted/70">Advanced: tap <strong className="text-barter-text">Change Server</strong> to use your own <code className="bg-barter-card px-1 rounded">relay-server.js</code> (Render/Railway/Fly) or a local <code>http://192.168…</code> for same-WiFi.</p>
+              <p className="text-barter-muted/70">Advanced: tap <strong className="text-barter-text">Change Server</strong> to point at your own <code className="bg-barter-card px-1 rounded">deno-relay</code> deployment (see DEPLOY-DENO.md).</p>
             </div>
           </div>
         )}
@@ -335,15 +335,14 @@ export default function Connect() {
         <Modal title="Online Server" onClose={() => setShowServer(false)} center>
           <div className="space-y-4">
             <p className="text-sm text-barter-muted">
-              Enter the relay's public URL (or a local <code className="bg-barter-card px-1 rounded">http://192.168…</code>
-              for same-WiFi). Everyone who enters the same URL + room code syncs together.
+              Enter your relay's public URL. Everyone who enters the same URL + room code syncs together.
             </p>
             <div>
               <label className="block text-sm font-medium mb-1.5">Server address</label>
               <input
                 value={serverDraft}
                 onChange={(e) => setServerDraft(e.target.value)}
-                placeholder="https://barternet.onrender.com"
+                placeholder="https://your-relay.deno.net"
                 autoCapitalize="off"
                 autoCorrect="off"
               />

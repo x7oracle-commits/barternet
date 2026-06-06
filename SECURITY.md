@@ -34,13 +34,13 @@ All peer data (BLE, relay, or imported file) is run through `validateBundle`
 This bounds local storage growth and blocks oversized / malformed payloads.
 React additionally escapes all rendered strings.
 
-## Relay hardening (`relay-server.js`)
+## Relay hardening (`deno-relay/main.ts`)
 
-The relay is store-and-forward only and never interprets bundle contents
-(authenticity is end-to-end). It defends against abuse with:
+The relay (Deno Deploy, WebSocket) is store-and-forward only and never interprets
+bundle contents (authenticity is end-to-end). It defends against abuse with:
 
-- per-IP rate limiting,
-- a 1 MB request-body cap,
+- per-connection rate limiting,
+- a 1 MB message cap,
 - room and per-room peer caps,
 - 5-minute TTL expiry of idle peers.
 
@@ -57,9 +57,8 @@ bounding IndexedDB growth from epidemic gossip.
 - **Forwarded (2-hop) peer listings are discovery-only** and not individually
   signed; they can never carry messages/offers, so impersonation harm is limited
   to spoofed listings. Direct-peer data is always verified.
-- **Use TLS for the hosted relay.** Deploy behind HTTPS (Render/Railway/Fly give
-  this for free) so bundles aren't readable in transit. The app accepts `https://`
-  URLs directly.
+- **Transport is TLS by default.** The relay runs on Deno Deploy over HTTPS/WSS,
+  so bundles aren't readable in transit. The app accepts `https://` URLs directly.
 
 ## Reporting
 

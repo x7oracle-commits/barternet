@@ -1,13 +1,13 @@
-// BarterNet relay for Deno Deploy — the scalable, free, no-cold-start option.
+// BarterNet relay — Deno Deploy, WebSocket. Scalable, free, no cold start.
 //
-// Why this instead of the Node/Render relay:
+// Design:
 //   • Deno Deploy runs globally distributed isolates with NO cold start.
-//   • WebSockets replace 4s polling, so bandwidth is O(changes), not O(N²/sec).
+//   • WebSockets push updates on change, so bandwidth is O(changes), not O(N²/sec).
 //   • A global BroadcastChannel fans a peer's update out to every isolate, so
 //     two phones connected to different edge locations still see each other.
 //
-// Like the Node relay, this is a DUMB, UNTRUSTED forwarder: bundles are opaque,
-// already signed (Ed25519) end-to-end by clients. The server only resists abuse.
+// This is a DUMB, UNTRUSTED forwarder: bundles are opaque, already signed
+// (Ed25519) end-to-end by clients. The server only resists abuse.
 //
 // Deploy: see DEPLOY-DENO.md. Entry point = this file. No build step.
 

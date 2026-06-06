@@ -7,8 +7,8 @@
 // trusted.
 //
 // We use @noble/ed25519 (not WebCrypto SubtleCrypto) on purpose: the app runs
-// in insecure contexts — http:// LAN relay, file:// exchange, Capacitor WebView
-// — where `crypto.subtle` is unavailable. Noble is pure JS and works anywhere.
+// in insecure contexts — file:// exchange, Capacitor WebView, plain http — where
+// `crypto.subtle` is unavailable. Noble is pure JS and works anywhere.
 
 import * as ed from "@noble/ed25519";
 import { sha512 } from "@noble/hashes/sha512.js";

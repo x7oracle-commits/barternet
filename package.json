@@ -8,7 +8,6 @@
     "build": "vite build && cp dist/index.html dist/barternet.html",
     "build:cap": "cross-env BUILD_TARGET=capacitor vite build && npx cap sync android",
     "apk": "npm run build:cap && cd android && gradlew.bat assembleDebug",
-    "relay": "node relay-server.js",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",

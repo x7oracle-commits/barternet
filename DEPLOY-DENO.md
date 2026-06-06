@@ -6,24 +6,31 @@ free, globally distributed, and never cold-starts.
 
 Entry point: **`deno-relay/main.ts`**. No build step, no env vars, no database.
 
-> The app already defaults to `https://barternet-relay.deno.dev`. Name your
-> project **`barternet-relay`** and it "just works" with no rebuild. Use a
-> different name only if you also set `VITE_RELAY_URL` (see `.env.example`) and
-> rebuild the app.
+> ⚠️ This repo is a **mixed project**: a Vite/React frontend (root `package.json`)
+> plus this Deno relay. Deno Deploy will try to *build the frontend* and fail
+> unless you point it at the `deno-relay/` subfolder. The key setting below
+> (**Root directory = `deno-relay`**) is what makes the build succeed.
+
+> The app reads its relay URL from `src/config.js` (override: `VITE_RELAY_URL`).
+> After deploying, copy your project's **stable** URL into that file and rebuild.
 
 ---
 
 ## Option A — Dashboard + GitHub (easiest, auto-deploys on push)
 
-1. Push this repo to GitHub (you likely already did for Render).
-2. Go to **https://dash.deno.com** → sign in with GitHub → **New Project**.
-3. Select your repo. Set:
-   - **Entry point:** `deno-relay/main.ts`
-   - **Project name:** `barternet-relay`  ← must match for the baked-in default
-   - Build command / install step: leave empty.
-4. Click **Deploy**. In ~10s you get `https://barternet-relay.deno.dev`.
+1. Push this repo to GitHub.
+2. Go to your Deno Deploy dashboard → **New Project / App** → select the repo.
+3. Set the build configuration:
+   - **Root directory:** `deno-relay`   ← critical — avoids the frontend build
+   - **Entrypoint:** `main.ts`
+   - **Install command / Build command:** leave **empty**
+   - **Framework preset:** None / Other
+4. Deploy. You get a URL like
+   `https://<project>.<org>.deno.net` (stable) plus per-deploy preview URLs that
+   include a hash (e.g. `…-v988r5tg9n8c…`).
 
-Every future `git push` redeploys automatically.
+**Use the stable URL (no hash)** in `src/config.js` — preview URLs change on every
+deploy. Every future `git push` redeploys automatically.
 
 ## Option B — CLI (deployctl)
 
@@ -42,7 +49,7 @@ It prints the live URL on success.
 ## Verify it works
 
 ```bash
-curl https://barternet-relay.deno.dev/ping
+curl https://barternet-relay.x7oracle-commits.deno.net/ping
 # → {"app":"BarterNet-Relay","transport":"ws","room":"global","peers":0}
 ```
 
@@ -56,9 +63,5 @@ enter). Two phones on the same room code now sync in real time.
   resists abuse (rate limits, size/room caps, 5-min TTL).
 - **Cross-region:** a global `BroadcastChannel` fans each update out to every
   isolate, so peers on different edge locations still see each other.
-- **Fallback:** if you ever point the app at a non-WebSocket relay (the old
-  `relay-server.js` on Render, or a `http://192.168…` LAN box), the client
-  detects there's no `/ws` and falls back to HTTP polling automatically.
-- **After changing the default URL** (different project name + `VITE_RELAY_URL`),
+- **After changing the default URL** (your own deployment + `VITE_RELAY_URL`),
   rebuild: `npm run build` (web) and `npm run apk` (Android).
-```

@@ -39,7 +39,8 @@
       "Bash(node *)",
       "Bash(npx vitest *)",
       "Bash(./gradlew.bat assembleDebug)",
-      "Bash(deno --version)"
+      "Bash(deno --version)",
+      "Bash(curl *)"
     ]
   }
 }

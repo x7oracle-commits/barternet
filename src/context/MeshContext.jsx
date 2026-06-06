@@ -265,14 +265,14 @@ export function MeshProvider({ children }) {
     if (bundle) await updateMeshBundle(JSON.stringify(bundle));
   }, [buildBundle, bleActive]);
 
-  // ── Online (WiFi LAN) transport ──────────────────────────────────────────
+  // ── Online (WebSocket) transport ──────────────────────────────────────────
   const startOnline = useCallback(() => {
     if (!serverUrl) { setOnlineError("Enter the server address"); return; }
     setOnlineError(null);
     startOnlineSync(
       serverUrl,
       roomCode,                          // shared room
-      buildBundle,                       // fresh bundle each poll
+      buildBundle,                       // fresh bundle on connect / heartbeat / change
       (b) => processMeshBundle(b),       // handle each peer's bundle
       (err) => setOnlineError(err),      // null on success
     );
@@ -284,7 +284,7 @@ export function MeshProvider({ children }) {
     refreshStats();
 
     if (mode === "online") {
-      // Stop BLE, start polling
+      // Stop BLE, start the WebSocket sync
       stopMesh().catch(() => {});
       setBleActive(false);
       setNearbyPeers([]);
@@ -304,8 +304,7 @@ export function MeshProvider({ children }) {
   }, [mode, serverUrl, roomCode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Whenever local data changes, re-advertise it. BLE pushes to the native
-  // advertiser; online mode pushes instantly over the WebSocket (a no-op on the
-  // polling fallback, which re-sends every tick anyway).
+  // advertiser; online mode pushes instantly over the WebSocket.
   useEffect(() => {
     refreshBundle();
     if (mode === "online") pushOnlineBundle();

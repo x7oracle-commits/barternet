@@ -8,6 +8,7 @@
 // Anyone in the world enters that URL + a shared room code in the app and
 // they sync together — no shared WiFi, no app store, no accounts.
 //
+<<<<<<< HEAD
 // The relay is a dumb store-and-forward box: bundles are opaque, signed blobs it
 // never inspects beyond a peer id. Authenticity is enforced end-to-end by the
 // clients (Ed25519 signatures). This server only has to survive abuse:
@@ -16,10 +17,15 @@
 //   • room + per-room peer caps      (stop unbounded growth)
 //   • TTL expiry                     (forget idle peers)
 // Data is in-memory only and expires after 5 min of inactivity.
+=======
+// Data is in-memory only and expires after 5 min of inactivity. Bundles are
+// partitioned by "room" so groups don't see each other unless they share a code.
+>>>>>>> ff0f92553b455483176028403fe79ae9890b7283
 
 const http = require("http");
 const os   = require("os");
 
+<<<<<<< HEAD
 const PORT   = process.env.PORT || 4000;
 const TTL_MS = 5 * 60 * 1000;
 
@@ -44,15 +50,24 @@ function rateLimited(ip) {
   return b.hits > RATE_MAX_HITS;
 }
 
+=======
+const PORT = process.env.PORT || 4000;
+const TTL_MS = 5 * 60 * 1000;
+
+>>>>>>> ff0f92553b455483176028403fe79ae9890b7283
 // room -> Map(peerId -> { bundle, ts })
 const rooms = new Map();
 
 function roomStore(room) {
+<<<<<<< HEAD
   if (!rooms.has(room)) {
     if (rooms.size >= MAX_ROOMS) prune();          // try to reclaim space first
     if (rooms.size >= MAX_ROOMS) return null;      // still full → refuse new room
     rooms.set(room, new Map());
   }
+=======
+  if (!rooms.has(room)) rooms.set(room, new Map());
+>>>>>>> ff0f92553b455483176028403fe79ae9890b7283
   return rooms.get(room);
 }
 
@@ -62,8 +77,11 @@ function prune() {
     for (const [id, v] of store) if (now - v.ts > TTL_MS) store.delete(id);
     if (store.size === 0) rooms.delete(room);
   }
+<<<<<<< HEAD
   // Forget rate buckets that have fully reset.
   for (const [ip, b] of rate) if (now > b.resetAt) rate.delete(ip);
+=======
+>>>>>>> ff0f92553b455483176028403fe79ae9890b7283
 }
 
 function send(res, code, obj) {
@@ -79,6 +97,7 @@ function send(res, code, obj) {
 function getRoom(url) {
   try {
     const u = new URL(url, "http://x");
+<<<<<<< HEAD
     const r = (u.searchParams.get("room") || "global").trim().toLowerCase();
     return r.slice(0, MAX_ROOM_LEN) || "global";
   } catch { return "global"; }
@@ -95,6 +114,15 @@ const server = http.createServer((req, res) => {
 
   if (rateLimited(clientIp(req))) return send(res, 429, { error: "rate limited" });
 
+=======
+    return (u.searchParams.get("room") || "global").trim().toLowerCase();
+  } catch { return "global"; }
+}
+
+const server = http.createServer((req, res) => {
+  if (req.method === "OPTIONS") return send(res, 204, {});
+
+>>>>>>> ff0f92553b455483176028403fe79ae9890b7283
   const path = req.url.split("?")[0];
 
   // Health check — Render (and other hosts) ping "/" to verify the service is
@@ -107,13 +135,18 @@ const server = http.createServer((req, res) => {
   if (req.method === "GET" && path === "/ping") {
     prune();
     const room = getRoom(req.url);
+<<<<<<< HEAD
     const store = rooms.get(room);
     return send(res, 200, { app: "BarterNet-Relay", room, peers: store ? store.size : 0 });
+=======
+    return send(res, 200, { app: "BarterNet-Relay", room, peers: roomStore(room).size });
+>>>>>>> ff0f92553b455483176028403fe79ae9890b7283
   }
 
   if (req.method === "POST" && path === "/sync") {
     const room = getRoom(req.url);
     let body = "";
+<<<<<<< HEAD
     let aborted = false;
     req.on("data", (c) => {
       body += c;
@@ -146,6 +179,16 @@ const server = http.createServer((req, res) => {
           }
         }
 
+=======
+    req.on("data", (c) => { body += c; if (body.length > 5_000_000) req.destroy(); });
+    req.on("end", () => {
+      try {
+        const bundle = JSON.parse(body);
+        const id = bundle?.peer?.id;
+        if (!id) return send(res, 400, { error: "missing peer id" });
+
+        const store = roomStore(room);
+>>>>>>> ff0f92553b455483176028403fe79ae9890b7283
         store.set(id, { bundle, ts: Date.now() });
         prune();
 

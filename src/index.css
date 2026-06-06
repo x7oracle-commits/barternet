@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-barter-bg text-barter-text;
+    font-family: system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior: none;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  input, textarea, select {
+    @apply bg-barter-card text-barter-text border border-white/10 rounded-xl px-4 py-3 w-full outline-none;
+    font-size: 16px; /* prevent iOS zoom */
+  }
+  input:focus, textarea:focus, select:focus {
+    @apply border-barter-accent;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-barter-accent text-white font-semibold px-5 py-3 rounded-xl active:opacity-80 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-ghost {
+    @apply text-barter-muted px-5 py-3 rounded-xl active:bg-white/5 transition-colors;
+  }
+  .btn-danger {
+    @apply bg-barter-red/20 text-barter-red font-semibold px-5 py-3 rounded-xl active:opacity-80 transition-opacity;
+  }
+  .card {
+    @apply bg-barter-card rounded-2xl p-4;
+  }
+  .badge {
+    @apply text-xs font-semibold px-2 py-0.5 rounded-full;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { @apply bg-white/10 rounded-full; }
+
+/* Bottom safe area */
+.pb-safe { padding-bottom: max(1rem, env(safe-area-inset-bottom)); }

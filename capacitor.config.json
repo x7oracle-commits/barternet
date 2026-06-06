@@ -1,0 +1,23 @@
+{
+  "appId": "com.barternet.app",
+  "appName": "BarterNet",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "BluetoothLe": {
+      "displayStrings": {
+        "scanning": "Looking for BarterNet devices…",
+        "cancel": "Cancel",
+        "availableDevices": "Nearby BarterNet Devices",
+        "noDeviceFound": "No BarterNet devices found nearby"
+      }
+    }
+  }
+}

@@ -1,105 +1,93 @@
-// BarterNet relay — Deno Deploy, WebSocket. Scalable, free, no cold start.
+// BarterNet relay — Deno Deploy, WebSocket + Deno KV. Scalable, no cold start.
 //
-// Design:
-//   • Deno Deploy runs globally distributed isolates with NO cold start.
-//   • WebSockets push updates on change, so bandwidth is O(changes), not O(N²/sec).
-//   • A global BroadcastChannel fans a peer's update out to every isolate, so
-//     two phones connected to different edge locations still see each other.
+// Why Deno KV instead of in-memory / BroadcastChannel:
+//   Deno Deploy runs MANY isolates. In-memory state isn't shared between them,
+//   and BroadcastChannel is not reliably bridging isolates on the current
+//   platform — so two clients can land on different isolates and never see each
+//   other. Deno KV is globally replicated, so we use it as the shared store:
+//   every peer's latest signed bundle is written to KV, and each isolate polls
+//   KV and pushes new bundles to its own connected sockets.
 //
 // This is a DUMB, UNTRUSTED forwarder: bundles are opaque, already signed
 // (Ed25519) end-to-end by clients. The server only resists abuse.
-//
-// Deploy: see DEPLOY-DENO.md. Entry point = this file. No build step.
 
-const TTL_MS          = 5 * 60 * 1000;
-const MAX_MSG_BYTES   = 1_000_000;   // 1 MB per bundle
-const MAX_ROOMS       = 5000;
-const MAX_PEERS_ROOM  = 500;
-const MAX_ROOM_LEN    = 64;
+const TTL_MS         = 5 * 60 * 1000; // forget a peer 5 min after its last update
+const POLL_MS        = 2500;          // how often each isolate pushes KV → sockets
+const MAX_MSG_BYTES  = 1_000_000;     // 1 MB per bundle
+const MAX_ROOM_LEN   = 64;
+const RATE_WINDOW_MS = 10_000;
+const RATE_MAX_MSGS  = 40;
 
-// Per-connection rate limit (token bucket over a sliding window).
-const RATE_WINDOW_MS  = 10_000;
-const RATE_MAX_MSGS   = 40;
+const kv = await Deno.openKv();
 
-// Unique id for THIS isolate so we ignore our own broadcasts.
-const ISO = crypto.randomUUID();
-const bc = new BroadcastChannel("barternet-relay");
+type Stored = { bundle: unknown; ts: number; peerId: string };
 
-type Entry = { bundle: unknown; ts: number };
-// room -> peerId -> latest bundle (for catch-up of newly joined peers)
-const cache = new Map<string, Map<string, Entry>>();
-// room -> set of locally-connected sockets
-const sockets = new Map<string, Set<WebSocket>>();
+// Per-isolate: which sockets are connected to each room. Each socket carries its
+// own peerId and a map of peerId→ts of what we've already delivered to it.
+const rooms = new Map<string, Set<WebSocket>>();
 
-function roomCache(room: string): Map<string, Entry> {
-  let m = cache.get(room);
-  if (!m) { m = new Map(); cache.set(room, m); }
-  return m;
+function roomSet(room: string): Set<WebSocket> {
+  let s = rooms.get(room);
+  if (!s) { s = new Set(); rooms.set(room, s); }
+  return s;
 }
 
-function prune() {
+// Read every live bundle in a room from KV and push any the local sockets
+// haven't seen yet (deduped by ts). This is what bridges across isolates.
+async function pushRoom(room: string) {
+  const set = rooms.get(room);
+  if (!set || set.size === 0) return;
+
   const now = Date.now();
-  for (const [room, m] of cache) {
-    for (const [id, e] of m) if (now - e.ts > TTL_MS) m.delete(id);
-    if (m.size === 0 && !(sockets.get(room)?.size)) cache.delete(room);
+  const live: Stored[] = [];
+  for await (const e of kv.list<Stored>({ prefix: ["room", room] })) {
+    const v = e.value;
+    if (v && typeof v.ts === "number" && now - v.ts <= TTL_MS) live.push(v);
+  }
+
+  for (const ws of set) {
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    // deno-lint-ignore no-explicit-any
+    const meta = ws as any;
+    const sent: Map<string, number> = meta._sent;
+    for (const v of live) {
+      if (v.peerId === meta._peerId) continue;     // don't echo a peer to itself
+      if (sent.get(v.peerId) === v.ts) continue;   // already delivered this version
+      try {
+        ws.send(JSON.stringify({ type: "bundle", bundle: v.bundle }));
+        sent.set(v.peerId, v.ts);
+      } catch { /* socket went away */ }
+    }
   }
 }
-setInterval(prune, 60_000);
+
+// One poller per isolate covers every room that has local sockets.
+setInterval(() => {
+  for (const room of rooms.keys()) pushRoom(room).catch(() => {});
+}, POLL_MS);
 
 function normRoom(url: URL): string {
   const r = (url.searchParams.get("room") || "global").trim().toLowerCase();
   return r.slice(0, MAX_ROOM_LEN) || "global";
 }
 
-// Store a peer's latest bundle in this isolate's cache and forward to local
-// sockets in the room (except the origin socket).
-function fanOutLocal(room: string, peerId: string, bundle: unknown, origin?: WebSocket) {
-  roomCache(room).set(peerId, { bundle, ts: Date.now() });
-  const set = sockets.get(room);
-  if (!set) return;
-  const payload = JSON.stringify({ type: "bundle", bundle });
-  for (const ws of set) {
-    if (ws === origin) continue;
-    if (ws.readyState === WebSocket.OPEN) {
-      try { ws.send(payload); } catch { /* dropped */ }
-    }
-  }
-}
-
-// Updates from other isolates arrive here.
-bc.onmessage = (ev: MessageEvent) => {
-  const d = ev.data as { iso: string; room: string; peerId: string; bundle: unknown };
-  if (!d || d.iso === ISO) return; // ignore our own
-  fanOutLocal(d.room, d.peerId, d.bundle);
-};
-
 function handleSocket(ws: WebSocket, room: string) {
-  let peerId: string | null = null;
+  // deno-lint-ignore no-explicit-any
+  const meta = ws as any;
+  meta._peerId = null;
+  meta._sent = new Map<string, number>();
   let hits = 0;
   let resetAt = Date.now() + RATE_WINDOW_MS;
 
   ws.onopen = () => {
-    const set = sockets.get(room) ?? new Set();
-    if (set.size >= MAX_PEERS_ROOM) { ws.close(1013, "room full"); return; }
-    if (!sockets.has(room)) {
-      if (sockets.size >= MAX_ROOMS) { ws.close(1013, "server full"); return; }
-      sockets.set(room, set);
-    }
-    set.add(ws);
-
-    // Catch the new peer up with everyone we currently know in the room.
-    const snap = roomCache(room);
-    for (const [, e] of snap) {
-      if (ws.readyState === WebSocket.OPEN) {
-        try { ws.send(JSON.stringify({ type: "bundle", bundle: e.bundle })); } catch { /* */ }
-      }
-    }
+    roomSet(room).add(ws);
+    pushRoom(room).catch(() => {}); // catch the new socket up immediately
   };
 
-  ws.onmessage = (ev) => {
+  ws.onmessage = async (ev) => {
     const now = Date.now();
     if (now > resetAt) { hits = 0; resetAt = now + RATE_WINDOW_MS; }
-    if (++hits > RATE_MAX_MSGS) return; // silently drop floods
+    if (++hits > RATE_MAX_MSGS) return;
 
     const raw = typeof ev.data === "string" ? ev.data : "";
     if (!raw || raw.length > MAX_MSG_BYTES) return;
@@ -111,17 +99,14 @@ function handleSocket(ws: WebSocket, room: string) {
     const b = msg.bundle;
     const id = b?.peer?.id;
     if (!b || b.app !== "BarterNet" || typeof id !== "string" || !id) return;
-    peerId = id;
 
-    fanOutLocal(room, id, b, ws);                       // local subscribers
-    bc.postMessage({ iso: ISO, room, peerId: id, bundle: b }); // other isolates
+    meta._peerId = id;
+    // Shared, cross-isolate store. expireIn auto-forgets idle peers.
+    await kv.set(["room", room, id], { bundle: b, ts: Date.now(), peerId: id }, { expireIn: TTL_MS });
+    pushRoom(room).catch(() => {}); // deliver to same-isolate peers right away
   };
 
-  const cleanup = () => {
-    const set = sockets.get(room);
-    if (set) { set.delete(ws); if (set.size === 0) sockets.delete(room); }
-    if (peerId) roomCache(room).delete(peerId);
-  };
+  const cleanup = () => { rooms.get(room)?.delete(ws); };
   ws.onclose = cleanup;
   ws.onerror = cleanup;
 }
@@ -133,12 +118,12 @@ function cors(h: Headers = new Headers()) {
   return h;
 }
 
-Deno.serve((req: Request) => {
+Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
 
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors() });
 
-  // WebSocket upgrade — the scalable path.
+  // WebSocket upgrade — the live transport.
   if (url.pathname === "/ws") {
     if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return new Response("expected websocket", { status: 426 });
@@ -149,12 +134,16 @@ Deno.serve((req: Request) => {
     return response;
   }
 
-  // HTTP health / ping — used by the app's "test server" and host health checks.
+  // Health / ping — used by the app's connectivity check and host health checks.
   if (url.pathname === "/" || url.pathname === "/ping") {
     const room = normRoom(url);
-    const peers = (sockets.get(room)?.size) ?? roomCache(room).size;
+    const now = Date.now();
+    let peers = 0;
+    for await (const e of kv.list<Stored>({ prefix: ["room", room] })) {
+      if (e.value && now - e.value.ts <= TTL_MS) peers++;
+    }
     return new Response(
-      JSON.stringify({ app: "BarterNet-Relay", transport: "ws", room, peers }),
+      JSON.stringify({ app: "BarterNet-Relay", transport: "ws+kv", room, peers }),
       { headers: cors(new Headers({ "Content-Type": "application/json" })) },
     );
   }

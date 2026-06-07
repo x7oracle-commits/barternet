@@ -42,7 +42,14 @@
       "Bash(deno --version)",
       "Bash(curl *)",
       "Bash(awk '{print $5, $9}')",
-      "Bash(awk '{print $5, $6, $7, $8}')"
+      "Bash(awk '{print $5, $6, $7, $8}')",
+      "Bash(git fetch *)",
+      "Bash(gh run *)",
+      "Bash(gh api *)",
+      "Bash(git symbolic-ref *)",
+      "Bash(git remote *)",
+      "Bash(git ls-tree *)",
+      "Bash(grep -oE \"/ws\\\\?|buzzes|ratings|type.{0,3}bundle\")"
     ]
   }
 }

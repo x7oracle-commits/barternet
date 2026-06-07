@@ -55,7 +55,10 @@ function b64url(data: Uint8Array | string): string {
 }
 
 async function fcmAccessToken(): Promise<string | null> {
-  if (!SA?.client_email || !SA?.private_key) return null;
+  if (!SA?.client_email || !SA?.private_key) {
+    console.warn("[fcm] service account missing client_email/private_key");
+    return null;
+  }
   const now = Math.floor(Date.now() / 1000);
   if (fcmAccess && fcmAccess.exp - 60 > now) return fcmAccess.token;
 
@@ -69,22 +72,32 @@ async function fcmAccessToken(): Promise<string | null> {
     exp: now + 3600,
   }));
   const input = `${head}.${claims}`;
-  const key = await crypto.subtle.importKey(
-    "pkcs8", pemToBuf(SA.private_key),
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"],
-  );
-  const sig = new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(input)));
-  const jwt = `${input}.${b64url(sig)}`;
 
-  const res = await fetch(tokenUri, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
-  });
-  if (!res.ok) return null;
-  const data = await res.json();
-  fcmAccess = { token: data.access_token, exp: now + (data.expires_in || 3600) };
-  return fcmAccess.token;
+  try {
+    const key = await crypto.subtle.importKey(
+      "pkcs8", pemToBuf(SA.private_key),
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"],
+    );
+    const sig = new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(input)));
+    const jwt = `${input}.${b64url(sig)}`;
+
+    const res = await fetch(tokenUri, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
+    });
+    if (!res.ok) {
+      console.error(`[fcm] token endpoint ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      return null;
+    }
+    const data = await res.json();
+    fcmAccess = { token: data.access_token, exp: now + (data.expires_in || 3600) };
+    console.log("[fcm] got access token");
+    return fcmAccess.token;
+  } catch (e) {
+    console.error("[fcm] access-token error:", (e as Error).message);
+    return null;
+  }
 }
 
 const PUSH_COPY: Record<string, { title: string; body: (n: string) => string }> = {
@@ -94,23 +107,29 @@ const PUSH_COPY: Record<string, { title: string; body: (n: string) => string }> 
 };
 
 async function sendPush(toPeerId: string, kind: string, fromName: string) {
-  if (!SA) return;
+  if (!SA) { console.warn("[push] no FCM_SERVICE_ACCOUNT configured"); return; }
   const rec = await kv.get<string>(["push", toPeerId]);
-  if (!rec.value) return;
+  if (!rec.value) { console.warn(`[push] no token registered for peer ${toPeerId}`); return; }
   const access = await fcmAccessToken();
-  if (!access) return;
+  if (!access) { console.warn("[push] could not obtain FCM access token"); return; }
   const copy = PUSH_COPY[kind] || PUSH_COPY.message;
-  await fetch(`https://fcm.googleapis.com/v1/projects/${SA.project_id}/messages:send`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      message: {
-        token: rec.value,
-        notification: { title: copy.title, body: copy.body(fromName || "Someone") },
-        android: { priority: "high" },
-      },
-    }),
-  }).catch(() => {});
+  try {
+    const res = await fetch(`https://fcm.googleapis.com/v1/projects/${SA.project_id}/messages:send`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: {
+          token: rec.value,
+          notification: { title: copy.title, body: copy.body(fromName || "Someone") },
+          android: { priority: "high" },
+        },
+      }),
+    });
+    const txt = await res.text();
+    console.log(`[push] FCM ${res.status} -> ${toPeerId}: ${res.ok ? "sent" : txt.slice(0, 300)}`);
+  } catch (e) {
+    console.error("[push] FCM send error:", (e as Error).message);
+  }
 }
 
 // Per-isolate state.
@@ -238,11 +257,13 @@ function handleSocket(ws: WebSocket, room: string) {
     if (msg.type === "register") {
       if (typeof msg.peerId === "string" && typeof msg.token === "string" && msg.peerId && msg.token) {
         await kv.set(["push", msg.peerId], msg.token, { expireIn: PUSH_TTL_MS }).catch(() => {});
+        console.log(`[register] peer=${msg.peerId} token=${msg.token.slice(0, 16)}…`);
       }
       return;
     }
     if (msg.type === "push") {
       if (typeof msg.toPeerId === "string" && msg.toPeerId) {
+        console.log(`[push-req] to=${msg.toPeerId} kind=${msg.kind} from=${msg.fromName}`);
         sendPush(msg.toPeerId, String(msg.kind || "message"), String(msg.fromName || "Someone")).catch(() => {});
       }
       return;

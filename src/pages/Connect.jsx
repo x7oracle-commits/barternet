@@ -4,6 +4,7 @@ import {
   FileUp, FileDown, Share2, CheckCircle, Bell, MapPin,
   ExternalLink, Copy, Navigation, ChevronDown, ChevronUp,
   Bluetooth, Radio, Loader, RefreshCw, MessageCircle,
+  Zap, Ban, UserMinus, MoreVertical,
 } from "lucide-react";
 import { locationLabel, formatCoords, geoUri, copyCoords } from "../utils/location.js";
 import { db, getProfile } from "../db/db.js";
@@ -12,6 +13,7 @@ import { signBundle } from "../utils/crypto.js";
 import { useToast } from "../components/Toast.jsx";
 import Modal from "../components/Modal.jsx";
 import { useMesh } from "../context/MeshContext.jsx";
+import Rating from "../components/Rating.jsx";
 
 export default function Connect() {
   const toast   = useToast();
@@ -20,31 +22,19 @@ export default function Connect() {
 
   const {
     bleActive, bleError, nearbyPeers, syncing, matches, peers, meshStats,
-    isNative, initMesh, retryMesh, processMeshBundle,
-    mode, setMode, serverUrl, saveServerUrl, roomCode, saveRoomCode, testServer,
+    isNative, initMesh, retryMesh, processMeshBundle, mode, setMode,
     onlineActive, onlineError,
+    buzzPeer, blockPeer, unblockPeer, removePeer, blockedPeers, reputations,
   } = mesh;
 
   const [showShareApp, setShowShareApp] = useState(false);
   const [showPeers,    setShowPeers]    = useState(false);
-  const [showServer,   setShowServer]   = useState(false);
-  const [serverDraft,  setServerDraft]  = useState(serverUrl || "");
-  const [roomDraft,    setRoomDraft]    = useState(roomCode || "global");
-  const [testing,      setTesting]      = useState(false);
+  const [showBlocked,  setShowBlocked]  = useState(false);
+  const [peerMenu,     setPeerMenu]     = useState(null); // peer object for action sheet
 
-  async function handleSaveServer() {
-    setTesting(true);
-    try {
-      const info = await testServer(serverDraft, roomDraft);
-      saveServerUrl(serverDraft.trim());
-      saveRoomCode(roomDraft);
-      toast(`Connected to "${info.room || roomDraft}" (${info.peers ?? 0} online)`, "success");
-      setShowServer(false);
-    } catch (err) {
-      toast("Cannot reach server: " + err.message, "error");
-    } finally {
-      setTesting(false);
-    }
+  function handleBuzz(p) {
+    buzzPeer(p.id);
+    toast(`📳 Buzzed ${p.name}!`, "info");
   }
 
   // ── Browser fallback: file export / import ───────────────────────────────
@@ -86,7 +76,7 @@ export default function Connect() {
           <h1 className="text-xl font-bold mb-1">Connect</h1>
           <p className="text-sm text-barter-muted">
             {mode === "online"
-              ? "Online — syncs over shared WiFi"
+              ? "Online — syncs over the internet"
               : isNative
               ? "Offline — connects via Bluetooth when someone is near"
               : "Offline — exchange items via Bluetooth file sharing"}
@@ -113,40 +103,25 @@ export default function Connect() {
 
         {/* ── Online status panel ──────────────────────────────────────────── */}
         {mode === "online" && (
-          <div className="space-y-3">
-            <div className={`rounded-2xl p-5 text-center space-y-2 ${
-              onlineActive && !onlineError
-                ? "bg-barter-green/10 border border-barter-green/30"
-                : "bg-barter-card"
-            }`}>
+          <div className={`rounded-2xl p-5 text-center space-y-2 ${
+            onlineActive && !onlineError
+              ? "bg-barter-green/10 border border-barter-green/30"
+              : "bg-barter-card"
+          }`}>
+            <div className="relative inline-block">
               <div className="text-3xl">🌐</div>
-              <p className="font-semibold">
-                {!serverUrl
-                  ? "No server set"
-                  : onlineError
-                  ? "Can't reach server"
-                  : "Connected — syncing over WiFi"}
-              </p>
-              <p className="text-xs text-barter-muted break-all">
-                {serverUrl || "Enter the relay server address to begin"}
-              </p>
-              {serverUrl && (
-                <p className="text-xs text-barter-accent">Room: {roomCode}</p>
+              {onlineActive && !onlineError && (
+                <span className="absolute -top-0.5 -right-1 w-3 h-3 bg-barter-green rounded-full border-2 border-barter-surface animate-pulse" />
               )}
-              {onlineError && <p className="text-xs text-barter-red">{onlineError}</p>}
-              <button
-                className="btn-primary text-sm py-2 px-6 mt-1"
-                onClick={() => { setServerDraft(serverUrl || ""); setRoomDraft(roomCode || "global"); setShowServer(true); }}
-              >
-                {serverUrl ? "Change Server" : "Set Server"}
-              </button>
             </div>
-
-            <div className="card bg-barter-surface text-xs text-barter-muted space-y-1">
-              <p className="font-semibold text-barter-text">Online works anywhere on Earth</p>
-              <p>A shared server is built in, so online mode works right away — everyone on the same <strong className="text-barter-text">room code</strong> syncs together over the internet, no setup needed.</p>
-              <p className="text-barter-muted/70">Advanced: tap <strong className="text-barter-text">Change Server</strong> to point at your own <code className="bg-barter-card px-1 rounded">deno-relay</code> deployment (see DEPLOY-DENO.md).</p>
-            </div>
+            <p className="font-semibold">
+              {onlineError ? "Connecting…" : onlineActive ? "Online" : "Starting…"}
+            </p>
+            <p className="text-xs text-barter-muted">
+              {onlineError
+                ? "Reaching the network — this can take a moment"
+                : "You're on the network — people on BarterNet appear below"}
+            </p>
           </div>
         )}
 
@@ -260,6 +235,9 @@ export default function Connect() {
                       <span className="truncate">{locationLabel(p.location)}</span>
                       <span>· {(p.items || []).length} items</span>
                     </p>
+                    <div className="mt-0.5">
+                      <Rating avg={reputations[p.id]?.avg || 0} count={reputations[p.id]?.count || 0} />
+                    </div>
                     {hasGPS && (
                       <a href={geoUri(p.location.lat, p.location.lng, p.name)} target="_blank" rel="noreferrer"
                         className="text-xs text-barter-accent flex items-center gap-1 mt-0.5">
@@ -267,15 +245,45 @@ export default function Connect() {
                       </a>
                     )}
                   </div>
-                  <Link
-                    to={`/chat?peerId=${p.id}&peerName=${encodeURIComponent(p.name)}`}
-                    className="text-barter-accent p-2 shrink-0 active:bg-white/10 rounded-lg"
-                  >
-                    <MessageCircle size={18} />
-                  </Link>
+                  <div className="flex items-center shrink-0">
+                    <button onClick={() => handleBuzz(p)} title="Buzz"
+                      className="text-barter-amber p-2 active:bg-white/10 rounded-lg">
+                      <Zap size={18} />
+                    </button>
+                    <Link
+                      to={`/chat?peerId=${p.id}&peerName=${encodeURIComponent(p.name)}`}
+                      className="text-barter-accent p-2 active:bg-white/10 rounded-lg"
+                    >
+                      <MessageCircle size={18} />
+                    </Link>
+                    <button onClick={() => setPeerMenu(p)} title="More"
+                      className="text-barter-muted p-2 active:bg-white/10 rounded-lg">
+                      <MoreVertical size={18} />
+                    </button>
+                  </div>
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* Blocked people */}
+        {blockedPeers.length > 0 && (
+          <div className="space-y-2">
+            <button onClick={() => setShowBlocked((v) => !v)} className="flex items-center justify-between w-full">
+              <h2 className="font-semibold text-barter-muted">Blocked ({blockedPeers.length})</h2>
+              {showBlocked ? <ChevronUp size={16} className="text-barter-muted" /> : <ChevronDown size={16} className="text-barter-muted" />}
+            </button>
+            {showBlocked && blockedPeers.map((b) => (
+              <div key={b.id} className="card flex items-center gap-3">
+                <Ban size={18} className="text-barter-red shrink-0" />
+                <p className="flex-1 min-w-0 font-medium truncate">{b.name}</p>
+                <button onClick={() => unblockPeer(b.id)}
+                  className="text-sm text-barter-accent px-3 py-1.5 active:bg-white/10 rounded-lg shrink-0">
+                  Unblock
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
@@ -330,42 +338,39 @@ export default function Connect() {
         </Modal>
       )}
 
-      {/* Server address modal */}
-      {showServer && (
-        <Modal title="Online Server" onClose={() => setShowServer(false)} center>
-          <div className="space-y-4">
-            <p className="text-sm text-barter-muted">
-              Enter your relay's public URL. Everyone who enters the same URL + room code syncs together.
-            </p>
-            <div>
-              <label className="block text-sm font-medium mb-1.5">Server address</label>
-              <input
-                value={serverDraft}
-                onChange={(e) => setServerDraft(e.target.value)}
-                placeholder="https://your-relay.deno.net"
-                autoCapitalize="off"
-                autoCorrect="off"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1.5">Room code</label>
-              <input
-                value={roomDraft}
-                onChange={(e) => setRoomDraft(e.target.value)}
-                placeholder="e.g. delhi-traders, family, global"
-                autoCapitalize="off"
-                autoCorrect="off"
-              />
-              <p className="text-xs text-barter-muted mt-1">
-                Only people using the same room code see each other.
-              </p>
-            </div>
-            <div className="flex gap-3">
-              <button className="btn-ghost flex-1" onClick={() => setShowServer(false)}>Cancel</button>
-              <button className="btn-primary flex-1" onClick={handleSaveServer} disabled={testing || !serverDraft.trim()}>
-                {testing ? "Testing…" : "Connect"}
-              </button>
-            </div>
+      {/* Per-peer action sheet: Buzz / Disconnect / Block */}
+      {peerMenu && (
+        <Modal title={peerMenu.name} onClose={() => setPeerMenu(null)} center>
+          <div className="space-y-2">
+            <button
+              className="w-full flex items-center gap-3 py-3 px-4 bg-barter-card rounded-xl active:opacity-80"
+              onClick={() => { handleBuzz(peerMenu); setPeerMenu(null); }}
+            >
+              <Zap size={18} className="text-barter-amber shrink-0" />
+              <span className="font-medium">Buzz</span>
+            </button>
+
+            <button
+              className="w-full flex items-center gap-3 py-3 px-4 bg-barter-card rounded-xl active:opacity-80 text-left"
+              onClick={() => { removePeer(peerMenu.id); toast(`Removed ${peerMenu.name}`, "info"); setPeerMenu(null); }}
+            >
+              <UserMinus size={18} className="text-barter-muted shrink-0" />
+              <span>
+                <span className="font-medium block">Disconnect</span>
+                <span className="text-xs text-barter-muted">Remove now — they can reconnect later</span>
+              </span>
+            </button>
+
+            <button
+              className="w-full flex items-center gap-3 py-3 px-4 bg-barter-red/10 rounded-xl active:opacity-80 text-left"
+              onClick={() => { blockPeer(peerMenu.id, peerMenu.name); toast(`Blocked ${peerMenu.name}`, "info"); setPeerMenu(null); }}
+            >
+              <Ban size={18} className="text-barter-red shrink-0" />
+              <span>
+                <span className="font-medium block text-barter-red">Block</span>
+                <span className="text-xs text-barter-muted">Hide them and ignore everything they send</span>
+              </span>
+            </button>
           </div>
         </Modal>
       )}

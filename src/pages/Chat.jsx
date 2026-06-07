@@ -1,16 +1,25 @@
 import { useState, useEffect, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Send, Bluetooth } from "lucide-react";
+import { ArrowLeft, Send, Bluetooth, Zap } from "lucide-react";
 import { getProfile, addMessage, messageId, getMessagesWith } from "../db/db.js";
 import { useMesh } from "../context/MeshContext.jsx";
+import { useToast } from "../components/Toast.jsx";
+import Rating from "../components/Rating.jsx";
 
 export default function Chat() {
   const [params] = useSearchParams();
   const nav      = useNavigate();
   const mesh     = useMesh();
+  const toast    = useToast();
 
   const peerId   = params.get("peerId")   || "";
   const peerName = params.get("peerName") || "Trader";
+
+  function handleBuzz() {
+    if (!peerId) return;
+    mesh?.buzzPeer?.(peerId);
+    toast(`📳 Buzzed ${peerName}!`, "info");
+  }
 
   const [messages, setMessages] = useState([]);
   const [text,     setText]     = useState("");
@@ -62,12 +71,19 @@ export default function Chat() {
           <ArrowLeft size={20} />
         </button>
         <div className="flex-1 min-w-0">
-          <p className="font-semibold truncate">{peerName}</p>
+          <div className="flex items-center gap-2">
+            <p className="font-semibold truncate">{peerName}</p>
+            <Rating avg={mesh?.reputations?.[peerId]?.avg || 0} count={mesh?.reputations?.[peerId]?.count || 0} showCount={false} />
+          </div>
           <p className="text-xs text-barter-muted flex items-center gap-1">
             <Bluetooth size={11} className="text-barter-accent" />
-            Messages sync over Bluetooth when nearby
+            Messages deliver when you're both connected
           </p>
         </div>
+        <button onClick={handleBuzz} title="Buzz"
+          className="p-2 rounded-xl active:bg-white/10 text-barter-amber shrink-0">
+          <Zap size={20} />
+        </button>
       </div>
 
       {/* Messages */}

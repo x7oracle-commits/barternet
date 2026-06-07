@@ -2,10 +2,15 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   db, messageId, upsertPeer, getPeers, saveProfile,
   ensureIdentity, pruneStalePeers,
+  isBlocked, blockPeer, unblockPeer, getBlocked, removePeer,
+  addBuzz, getRecentBuzzes,
 } from "./db.js";
 
 beforeEach(async () => {
-  await Promise.all([db.peers.clear(), db.profile.clear(), db.messages.clear()]);
+  await Promise.all([
+    db.peers.clear(), db.profile.clear(), db.messages.clear(),
+    db.blocked.clear(), db.buzzes.clear(),
+  ]);
 });
 
 describe("messageId", () => {
@@ -48,5 +53,46 @@ describe("ensureIdentity", () => {
     const r = await ensureIdentity();
     expect(r.priv).toBe("K");
     expect(r.uid).toBe("x");
+  });
+});
+
+describe("blocking", () => {
+  it("blocks a peer and removes their presence", async () => {
+    await upsertPeer({ id: "bob", name: "Bob" });
+    expect(await isBlocked("bob")).toBe(false);
+    await blockPeer("bob", "Bob");
+    expect(await isBlocked("bob")).toBe(true);
+    expect((await getPeers()).find((p) => p.id === "bob")).toBeUndefined(); // presence wiped
+    expect((await getBlocked()).map((b) => b.id)).toContain("bob");
+  });
+
+  it("unblocks a peer", async () => {
+    await blockPeer("bob", "Bob");
+    await unblockPeer("bob");
+    expect(await isBlocked("bob")).toBe(false);
+  });
+
+  it("removePeer deletes presence without blocking", async () => {
+    await upsertPeer({ id: "ann", name: "Ann" });
+    await removePeer("ann");
+    expect((await getPeers()).find((p) => p.id === "ann")).toBeUndefined();
+    expect(await isBlocked("ann")).toBe(false); // not blocked — can return later
+  });
+});
+
+describe("buzz", () => {
+  it("stores a buzz and returns it as recent", async () => {
+    await addBuzz("bob");
+    const recent = await getRecentBuzzes();
+    expect(recent.map((z) => z.toPeerId)).toContain("bob");
+  });
+
+  it("excludes stale buzzes from the recent window", async () => {
+    await db.buzzes.add({ toPeerId: "old", ts: Date.now() - 5 * 60_000 });
+    await addBuzz("fresh");
+    const recent = await getRecentBuzzes();
+    const ids = recent.map((z) => z.toPeerId);
+    expect(ids).toContain("fresh");
+    expect(ids).not.toContain("old");
   });
 });

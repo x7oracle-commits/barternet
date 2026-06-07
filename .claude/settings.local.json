@@ -40,7 +40,9 @@
       "Bash(npx vitest *)",
       "Bash(./gradlew.bat assembleDebug)",
       "Bash(deno --version)",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "Bash(awk '{print $5, $9}')",
+      "Bash(awk '{print $5, $6, $7, $8}')"
     ]
   }
 }

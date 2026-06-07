@@ -132,6 +132,7 @@ export function buildMeshBundle(profile, myItems, myWants, knownPeers) {
       id:       p.id,
       name:     p.name,
       location: p.location,
+      avatar:   p.avatar || null,
       pub:      p.pub || null,
       items:    Array.isArray(p.items) ? p.items : [],
     })),
@@ -147,7 +148,9 @@ function stripImages(items) {
 
 // trades: full array from db.trades — offers and responses are extracted here
 // messages: unsynced chat messages I've sent
-export function buildBleBundle(profile, myItems, myWants, knownPeers, trades = [], messages = []) {
+// buzzes: recent nudges I've sent -> { toPeerId, ts }
+// ratings: signed reputation ratings to gossip (self-contained, verified on receipt)
+export function buildBleBundle(profile, myItems, myWants, knownPeers, trades = [], messages = [], buzzes = [], ratings = []) {
   const bundle = buildMeshBundle(profile, myItems, myWants, knownPeers);
   bundle.items = stripImages(bundle.items);
   bundle.mesh  = bundle.mesh.map((p) => ({ ...p, items: stripImages(p.items || []) }));
@@ -187,6 +190,18 @@ export function buildBleBundle(profile, myItems, myWants, knownPeers, trades = [
     text:     m.text,
     ts:       m.ts,
   }));
+
+  // Buzzes (nudges) I've recently sent — ride along so the recipient feels them
+  bundle.buzzes = buzzes.map((z) => ({
+    toPeerId: z.toPeerId,
+    fromId:   myId,
+    fromName: profile.name,
+    ts:       z.ts,
+  }));
+
+  // Signed reputation ratings — already self-contained; forward as-is to gossip
+  // them across the network. The receiver verifies each one independently.
+  bundle.ratings = ratings;
 
   return bundle;
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { HashRouter, Routes, Route } from "react-router-dom";
 import { getProfile, ensureIdentity, pruneStalePeers } from "./db/db.js";
+import { initNotifications } from "./utils/notify.js";
 import { ToastProvider } from "./components/Toast.jsx";
 import { MeshProvider } from "./context/MeshContext.jsx";
 import BottomNav from "./components/BottomNav.jsx";
@@ -23,6 +24,7 @@ export default function App() {
       if (p) {
         await ensureIdentity();          // backfill keys for pre-signing profiles
         pruneStalePeers().catch(() => {}); // bound storage growth (fire-and-forget)
+        initNotifications().catch(() => {}); // ask for notification permission
       }
       setHasProfile(!!p);
       setReady(true);

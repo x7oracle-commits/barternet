@@ -6,11 +6,14 @@ import Modal from "../components/Modal.jsx";
 import LocationPicker from "../components/LocationPicker.jsx";
 import { shortId } from "../utils/id.js";
 import { locationLabel, formatCoords, geoUri, copyCoords } from "../utils/location.js";
+import { useMesh } from "../context/MeshContext.jsx";
+import Rating from "../components/Rating.jsx";
 
 const AVATARS = ["🦁", "🐻", "🦊", "🐺", "🐸", "🦋", "🦅", "🐬", "🦄", "🐙"];
 
 export default function Profile({ onReset }) {
   const toast = useToast();
+  const mesh  = useMesh();
   const [profile,   setProfile]   = useState(null);
   const [editing,   setEditing]   = useState(false);
   const [form,      setForm]      = useState({});
@@ -88,6 +91,9 @@ export default function Profile({ onReset }) {
         <div className="card text-center space-y-2">
           <div className="text-6xl">{profile.avatar || "👤"}</div>
           <h2 className="text-xl font-bold">{profile.name}</h2>
+          <div className="flex justify-center">
+            <Rating avg={mesh?.myReputation?.avg || 0} count={mesh?.myReputation?.count || 0} />
+          </div>
 
           {/* Location display */}
           <div className="flex flex-col items-center gap-1">

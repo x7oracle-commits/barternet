@@ -1,16 +1,24 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
 import {
   db, getProfile, upsertPeer, addMessage, messageId,
+  isBlocked, getBlocked, blockPeer as dbBlockPeer, unblockPeer as dbUnblockPeer,
+  removePeer as dbRemovePeer, addBuzz, getRecentBuzzes,
+  saveRating, getAllRatings, getRatingsForBundle,
 } from "../db/db.js";
 import { buildBleBundle } from "../utils/bluetooth.js";
 import { validateBundle } from "../utils/validate.js";
 import { signBundle, verifyBundle } from "../utils/crypto.js";
+import { buildRating, verifyRating, aggregateReputations } from "../utils/ratings.js";
+import { playBuzz, shakeScreen } from "../utils/buzz.js";
+import { notify } from "../utils/notify.js";
 import {
   isNative, startMesh, stopMesh, updateMeshBundle,
   pullBundleFromPeer, approveSync,
 } from "../utils/nativeBluetooth.js";
 import { startOnlineSync, stopOnlineSync, pingServer, pushOnlineBundle } from "../utils/onlineSync.js";
 import { DEFAULT_RELAY_URL, DEFAULT_ROOM } from "../config.js";
+import { useToast } from "../components/Toast.jsx";
+import { App as CapApp } from "@capacitor/app";
 
 const MeshContext = createContext(null);
 export const useMesh = () => useContext(MeshContext);
@@ -24,10 +32,25 @@ const LS_MODE   = "barter_mode";        // "offline" | "online"
 const LS_SERVER = "barter_server_url";  // relay URL for online mode
 const LS_ROOM   = "barter_room";        // shared room code
 
+// Hosts from earlier builds that no longer exist. A stored value pointing at one
+// of these is dropped on launch so the app reverts to the current built-in
+// default — otherwise an over-the-top reinstall keeps the dead URL forever.
+const DEAD_HOSTS = [/onrender\.com/i];
+
+function readStoredServer() {
+  const stored = localStorage.getItem(LS_SERVER);
+  if (stored && DEAD_HOSTS.some((re) => re.test(stored))) {
+    localStorage.removeItem(LS_SERVER);
+    return DEFAULT_RELAY_URL;
+  }
+  return stored || DEFAULT_RELAY_URL;
+}
+
 export function MeshProvider({ children }) {
+  const toast = useToast();
   const [mode,      setModeState] = useState(() => localStorage.getItem(LS_MODE) || "offline");
   // Fall back to the built-in relay so online mode works with zero setup.
-  const [serverUrl, setServerUrl] = useState(() => localStorage.getItem(LS_SERVER) || DEFAULT_RELAY_URL);
+  const [serverUrl, setServerUrl] = useState(readStoredServer);
   const [roomCode,  setRoomCode]  = useState(() => localStorage.getItem(LS_ROOM) || DEFAULT_ROOM);
   const [onlineError, setOnlineError] = useState(null);
   const [onlineActive, setOnlineActive] = useState(false);
@@ -38,6 +61,9 @@ export function MeshProvider({ children }) {
   const [syncing,     setSyncing]     = useState(null);
   const [matches,     setMatches]     = useState([]);
   const [peers,       setPeers]       = useState([]);
+  const [blockedPeers, setBlockedPeers] = useState([]);
+  const [reputations, setReputations] = useState({});           // peerId -> { avg, count }
+  const [myReputation, setMyReputation] = useState({ avg: 0, count: 0 });
   const [meshStats,   setMeshStats]   = useState({ peers: 0, items: 0 });
 
   // bump this whenever stored data changes so pages can re-read
@@ -47,23 +73,45 @@ export function MeshProvider({ children }) {
   const syncingRef  = useRef(new Set());   // deviceIds currently syncing
   const lastSyncRef = useRef(new Map());   // deviceId → last successful sync ts
   const lastSeenRef = useRef(new Map());   // deviceId → last heartbeat ts
+  const lastBuzzRef = useRef(new Map());   // peerId → ts of last buzz we reacted to
+  const appActiveRef = useRef(true);       // is the app in the foreground?
+
+  // Alert the user about an event. Foreground → in-app toast; background → an OS
+  // notification (so they see it on the lock screen / notification shade).
+  const alertUser = useCallback((title, body) => {
+    if (appActiveRef.current) toast(`${title} ${body}`.trim(), "info");
+    else notify(title, body);
+  }, [toast]);
+
+  // React to an incoming buzz: sound + haptic + screen shake, always; plus an
+  // alert routed to toast or notification depending on foreground state.
+  const handleBuzz = useCallback((fromName) => {
+    playBuzz();
+    shakeScreen();
+    alertUser("📳 Buzz!", `${fromName || "Someone"} buzzed you`);
+  }, [alertUser]);
 
   const RESYNC_INTERVAL_MS = 5000;  // re-pull from an in-range peer every 5s
   const PEER_STALE_MS      = 30000; // drop peer from list if not seen for 30s
+  const NOTIFY_FRESH_MS    = 120000; // only notify for events newer than 2 min (avoid backlog spam)
+
+  const seenMatchRef = useRef(new Set()); // match keys we've already alerted on
 
   // Build the current outgoing bundle from the DB
   const buildBundle = useCallback(async () => {
     const prof = await getProfile();
     if (!prof) return null;
-    const [items, allPeers, trades, msgs] = await Promise.all([
+    const [items, allPeers, trades, msgs, buzzes, ratings] = await Promise.all([
       db.items.toArray().catch(() => []),
       db.peers.toArray().catch(() => []),
       db.trades.toArray().catch(() => []),
       db.messages.filter((m) => m.mine).toArray().catch(() => []),
+      getRecentBuzzes().catch(() => []),
+      getRatingsForBundle().catch(() => []),
     ]);
     const myItems = items.filter((i) => i.type !== "want" && i.status === "available");
     const myWants = items.filter((i) => i.type === "want");
-    const bundle  = buildBleBundle(prof, myItems, myWants, allPeers, trades, msgs);
+    const bundle  = buildBleBundle(prof, myItems, myWants, allPeers, trades, msgs, buzzes, ratings);
     // Sign so receivers can prove this bundle came from us. Legacy profiles with
     // no key go unsigned and will be rejected — App.jsx migrates them on launch.
     return prof.priv ? signBundle(bundle, prof.priv) : bundle;
@@ -71,10 +119,30 @@ export function MeshProvider({ children }) {
 
   // Refresh peer list / stats for the UI
   const refreshStats = useCallback(async () => {
-    const allPeers = await db.peers.toArray().catch(() => []);
-    setPeers(allPeers);
-    const totalItems = allPeers.reduce((n, p) => n + (p.items || []).length, 0);
-    setMeshStats({ peers: allPeers.length, items: totalItems });
+    const [allPeers, blocked, ratings, prof] = await Promise.all([
+      db.peers.toArray().catch(() => []),
+      getBlocked().catch(() => []),
+      getAllRatings().catch(() => []),
+      getProfile().catch(() => null),
+    ]);
+
+    // Aggregate reputation from all verified ratings we hold.
+    const reps = aggregateReputations(ratings);
+    setReputations(reps);
+    const myId = prof?.uid || prof?.id;
+    setMyReputation(reps[myId] || { avg: 0, count: 0 });
+
+    const blockedIds = new Set(blocked.map((b) => b.id));
+    const visible = allPeers.filter((p) => !blockedIds.has(p.id));
+    // "People You've Met" = peers we synced with directly. Gossip-only peers
+    // (learned 2nd-hand via the mesh) stay in the network for discovery/matching
+    // but aren't shown as people you've met — otherwise a stale gossiped id shows
+    // up as an avatar-less duplicate of someone you actually connected with.
+    const directPeers = visible.filter((p) => p.direct);
+    setPeers(directPeers);
+    setBlockedPeers(blocked);
+    const totalItems = visible.reduce((n, p) => n + (p.items || []).length, 0);
+    setMeshStats({ peers: directPeers.length, items: totalItems });
   }, []);
 
   // Process a bundle received from a peer (BLE, online relay, or imported file).
@@ -84,6 +152,9 @@ export function MeshProvider({ children }) {
     const myProf   = await getProfile();
     const myPeerId = myProf?.uid || myProf?.id;
     if (myPeerId && raw?.peer?.id === myPeerId) return { skipped: true };
+
+    // Blocked peers: ignore everything they send (items, messages, offers, buzzes).
+    if (await isBlocked(raw?.peer?.id)) return { rejected: "blocked" };
 
     // Authenticity gate FIRST, on the raw bytes as transmitted: the bundle must
     // carry a valid signature from the key whose fingerprint is peer.id. Verifying
@@ -104,16 +175,20 @@ export function MeshProvider({ children }) {
 
     const { peer, items = [], mesh = [] } = bundle;
 
-    await upsertPeer({ id: peer.id, name: peer.name, location: peer.location, avatar: peer.avatar, pub: peer.pub, items });
+    // direct: true marks someone we synced with first-hand (shown in "People
+    // You've Met"). Gossip entries below are not direct.
+    await upsertPeer({ id: peer.id, name: peer.name, location: peer.location, avatar: peer.avatar, pub: peer.pub, items, direct: true });
 
     // Forwarded (2-hop) peers are discovery-only — we can't verify their item
     // lists, so we never let them carry messages/offers. Store for browsing but
-    // don't clobber a peer we've heard from directly more recently.
+    // never clobber or downgrade a peer we've actually met.
     for (const p of mesh) {
       if (p.id === myPeerId) continue;
+      if (await isBlocked(p.id)) continue; // don't let blocked peers back in via gossip
       const existing = await db.peers.get(p.id);
+      if (existing?.direct) continue; // never overwrite a directly-met peer with gossip
       if (!existing || existing.lastSeen < bundle.ts - 3_600_000) {
-        await upsertPeer({ id: p.id, name: p.name, location: p.location, pub: p.pub, items: p.items || [] });
+        await upsertPeer({ id: p.id, name: p.name, location: p.location, avatar: p.avatar, pub: p.pub, items: p.items || [], direct: false });
       }
     }
 
@@ -146,6 +221,8 @@ export function MeshProvider({ children }) {
           fromMessage: offer.message || "", createdAt: offer.ts || Date.now(),
         });
         newOffers++;
+        if (Date.now() - (offer.ts || 0) < NOTIFY_FRESH_MS)
+          alertUser("🤝 New trade offer", `${peer.name} wants to trade with you`);
       }
     }
 
@@ -154,15 +231,20 @@ export function MeshProvider({ children }) {
     for (const resp of bundle.responses || []) {
       if (resp.toPeerId !== myPeerId) continue;
       const trade = await db.trades.get(resp.tradeId);
-      // Only the peer the trade is actually with may respond to it.
-      if (trade && trade.withPeerId !== peer.id) continue;
-      if (trade && trade.initiatedByMe && !["completed", "declined"].includes(trade.status)) {
-        await db.trades.update(resp.tradeId, {
-          status: resp.status === "accepted" ? "accepted" : "declined",
-          declineReason: resp.reason || "",
-        });
-        updatedOffers++;
-      }
+      if (!trade || trade.withPeerId !== peer.id || !trade.initiatedByMe) continue;
+      if (["completed", "declined"].includes(trade.status)) continue;
+      const newStatus = resp.status === "accepted" ? "accepted" : "declined";
+      if (trade.status === newStatus) continue; // already applied — don't re-alert
+      await db.trades.update(resp.tradeId, {
+        status: newStatus,
+        declineReason: resp.reason || "",
+        respondedAt: Date.now(),
+      });
+      updatedOffers++;
+      alertUser(
+        newStatus === "accepted" ? "✅ Offer accepted" : "❌ Offer declined",
+        `by ${peer.name}`,
+      );
     }
 
     // Incoming chat messages addressed to me
@@ -178,7 +260,31 @@ export function MeshProvider({ children }) {
           text: m.text, ts: m.ts, mine: false, synced: true,
         });
         newMessages++;
+        if (Date.now() - (m.ts || 0) < NOTIFY_FRESH_MS)
+          alertUser(`💬 ${m.fromName || peer.name}`, m.text);
       }
+    }
+
+    // Incoming buzzes (nudges) addressed to me — react once per fresh buzz.
+    for (const bz of bundle.buzzes || []) {
+      if (bz.toPeerId !== myPeerId) continue;
+      if (bz.fromId !== peer.id) continue; // signer can only buzz as themselves
+      const last = lastBuzzRef.current.get(peer.id) || 0;
+      if (bz.ts > last) {
+        lastBuzzRef.current.set(peer.id, bz.ts);
+        // Only react to fresh buzzes so replays (heartbeats, reconnects) don't re-fire.
+        if (Date.now() - bz.ts < 90_000) handleBuzz(peer.name);
+      }
+    }
+
+    // Incoming signed reputation ratings. Each is self-contained and verified
+    // independently, so we accept valid ones no matter who forwarded them
+    // (gossip). Skip ones we already hold to avoid re-verifying every sync.
+    for (const r of bundle.ratings || []) {
+      const existing = await db.ratings.get(r.id);
+      if (existing && existing.sig === r.sig) continue;
+      if (await isBlocked(r.raterId)) continue; // ignore ratings from blocked people
+      if (verifyRating(r)) await saveRating(r);
     }
 
     // We're connected to this peer bidirectionally — mark my pending messages
@@ -195,7 +301,16 @@ export function MeshProvider({ children }) {
       .modify({ responseSynced: true })
       .catch(() => {});
 
-    if (found.length) setMatches(found);
+    if (found.length) {
+      setMatches(found);
+      for (const f of found) {
+        const key = `${f.wantTitle}|${f.item.title}|${f.item.id || f.peerName}`;
+        if (!seenMatchRef.current.has(key)) {
+          seenMatchRef.current.add(key);
+          alertUser("🎯 Match found!", `${f.item.title} from ${f.peerName}`);
+        }
+      }
+    }
     await refreshStats();
     bumpData();
 
@@ -204,7 +319,7 @@ export function MeshProvider({ children }) {
       matches: found.length,
       newOffers, updatedOffers, newMessages,
     };
-  }, [refreshStats, bumpData]);
+  }, [refreshStats, bumpData, handleBuzz, alertUser]);
 
   // Auto-sync with a peer. force=true bypasses the re-sync interval gate.
   const autoSync = useCallback(async (peer, force = false) => {
@@ -310,6 +425,27 @@ export function MeshProvider({ children }) {
     if (mode === "online") pushOnlineBundle();
   }, [dataVersion, refreshBundle, mode]);
 
+  // Foreground/background handling. While backgrounded the WebView throttles or
+  // pauses JS, so the socket can go stale; when the app resumes we force a fresh
+  // sync. We also track foreground state so alerts route to a toast (foreground)
+  // or an OS notification (background).
+  const resumeRef = useRef(() => {});
+  useEffect(() => {
+    resumeRef.current = () => {
+      if (mode === "online") { stopOnlineSync(); startOnline(); }
+      else if (isNative()) initMesh();
+    };
+  }, [mode, startOnline, initMesh]);
+
+  useEffect(() => {
+    let sub;
+    CapApp.addListener("appStateChange", ({ isActive }) => {
+      appActiveRef.current = isActive;
+      if (isActive) resumeRef.current();
+    }).then((s) => { sub = s; }).catch(() => {});
+    return () => { sub?.remove?.(); };
+  }, []);
+
   // Drop peers we haven't heard from recently (BLE walked out of range)
   useEffect(() => {
     if (!isNative()) return;
@@ -348,6 +484,44 @@ export function MeshProvider({ children }) {
 
   const testServer = useCallback((u, r) => pingServer(u, r), []);
 
+  // ── Peer actions: block / disconnect / buzz ────────────────────────────────
+  const blockPeer = useCallback(async (peerId, name) => {
+    await dbBlockPeer(peerId, name);
+    await refreshStats();
+    bumpData();
+  }, [refreshStats, bumpData]);
+
+  const unblockPeer = useCallback(async (peerId) => {
+    await dbUnblockPeer(peerId);
+    await refreshStats();
+  }, [refreshStats]);
+
+  const removePeer = useCallback(async (peerId) => {
+    await dbRemovePeer(peerId);
+    await refreshStats();
+    bumpData();
+  }, [refreshStats, bumpData]);
+
+  // Send a buzz to a peer. bumpData rebuilds + pushes our bundle, carrying the
+  // buzz to them over WebSocket (online) or the BLE advertiser (offline).
+  const buzzPeer = useCallback(async (peerId) => {
+    await addBuzz(peerId);
+    bumpData();
+  }, [bumpData]);
+
+  // Sign and store a reputation rating for a peer, then broadcast it.
+  const submitRating = useCallback(async (ratedId, stars, tradeId, comment = "") => {
+    const prof = await getProfile();
+    if (!prof?.priv) return;
+    try {
+      await saveRating(buildRating(prof, ratedId, stars, tradeId, comment));
+      await refreshStats();
+      bumpData();
+    } catch (e) {
+      console.warn("Rating failed:", e.message);
+    }
+  }, [refreshStats, bumpData]);
+
   const value = {
     // mode
     mode, setMode, serverUrl, saveServerUrl, roomCode, saveRoomCode, testServer,
@@ -360,6 +534,10 @@ export function MeshProvider({ children }) {
     processMeshBundle, refreshStats, refreshBundle,
     isNative: isNative(),
     clearMatches: () => setMatches([]),
+    // peer actions
+    blockedPeers, blockPeer, unblockPeer, removePeer, buzzPeer,
+    // reputation
+    reputations, myReputation, submitRating,
   };
 
   return <MeshContext.Provider value={value}>{children}</MeshContext.Provider>;

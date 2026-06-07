@@ -20,6 +20,18 @@ const STATUS_META = {
   incoming_want:  { color: "text-barter-accent",  label: "They want your item",   Icon: Bell },
 };
 
+function fmtTime(ts) {
+  if (!ts) return "";
+  return new Date(ts).toLocaleString(undefined, {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+// The most recent status-change time, if any.
+function statusTime(trade) {
+  return trade.completedAt || trade.respondedAt || trade.acceptedAt || trade.declinedAt || null;
+}
+
 function StarRating({ value, onChange }) {
   return (
     <div className="flex gap-1">
@@ -115,6 +127,10 @@ export default function Trades() {
     if (completing.myItem?.id) {
       await updateItem(completing.myItem.id, { status: "traded" });
     }
+    // Sign + broadcast a reputation rating for the trade partner.
+    if (completing.withPeerId) {
+      await mesh?.submitRating?.(completing.withPeerId, rating, completing.id, notes.trim());
+    }
     setSaving(false);
     setCompleting(null);
     toast("Trade recorded! Great barter!", "success");
@@ -190,6 +206,17 @@ export default function Trades() {
                   <span className="text-barter-muted">{trade.initiatedByMe ? "Offering to " : "From "}</span>
                   <strong>{trade.withPeerName}</strong>
                 </p>
+
+                {/* Timestamps */}
+                {trade.createdAt && (
+                  <p className="text-[11px] text-barter-muted flex items-center gap-1.5 flex-wrap -mt-1">
+                    <Clock size={11} className="shrink-0" />
+                    <span>{fmtTime(trade.createdAt)}</span>
+                    {statusTime(trade) && statusTime(trade) !== trade.createdAt && (
+                      <span>· updated {fmtTime(statusTime(trade))}</span>
+                    )}
+                  </p>
+                )}
 
                 {/* Items */}
                 {(trade.myItem || trade.theirItem) && (

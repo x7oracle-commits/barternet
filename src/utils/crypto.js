@@ -105,5 +105,30 @@ export function verifyBundle(bundle) {
   }
 }
 
+// ── Generic object signing (used for individually-signed ratings) ────────────
+// Signs over a stable serialization of the object (excluding any `sig` field),
+// so the signature survives JSON round-trips and key reordering in transit.
+
+export function signObject(obj, privB64) {
+  if (!privB64) throw new Error("Cannot sign without a private key");
+  const digest = sha256(new TextEncoder().encode(stableStringify(obj)));
+  return bytesToB64(ed.sign(digest, b64ToBytes(privB64)));
+}
+
+export function verifyObject(obj, sigB64, pubB64) {
+  try {
+    if (!sigB64 || !pubB64) return false;
+    const digest = sha256(new TextEncoder().encode(stableStringify(obj)));
+    return ed.verify(b64ToBytes(sigB64), digest, b64ToBytes(pubB64));
+  } catch {
+    return false;
+  }
+}
+
+// Recover the peer-id fingerprint from a base64 public key (helper for verifiers).
+export function fingerprintOf(pubB64) {
+  try { return fingerprint(b64ToBytes(pubB64)); } catch { return null; }
+}
+
 // Exposed for tests
 export const _internal = { stableStringify, bytesToB64, b64ToBytes };

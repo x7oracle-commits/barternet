@@ -20,6 +20,30 @@ db.version(2).stores({
   messages: "id, peerId, ts, [peerId+ts]",
 });
 
+// v3 — blocked peers + outgoing buzzes (nudges)
+db.version(3).stores({
+  profile: "id",
+  items: "++id, category, status, createdAt",
+  trades: "++id, status, withPeerId, createdAt",
+  peers: "id, lastSeen",
+  messages: "id, peerId, ts, [peerId+ts]",
+  blocked: "id",        // peerId -> { id, name, ts }
+  buzzes: "++id, ts",   // outgoing buzzes I've sent -> { toPeerId, ts }
+});
+
+// v4 — signed reputation ratings (gossiped across the mesh)
+db.version(4).stores({
+  profile: "id",
+  items: "++id, category, status, createdAt",
+  trades: "++id, status, withPeerId, createdAt",
+  peers: "id, lastSeen",
+  messages: "id, peerId, ts, [peerId+ts]",
+  blocked: "id",
+  buzzes: "++id, ts",
+  // id = `${raterId}:${tradeId}` -> one rating per rater per trade
+  ratings: "id, ratedId, raterId, ts",
+});
+
 export async function getProfile() {
   return db.profile.get("me");
 }
@@ -86,6 +110,73 @@ export async function pruneStalePeers(maxAgeMs = PEER_MAX_AGE_MS) {
   const stale = await db.peers.filter((p) => (p.lastSeen || 0) < cutoff).primaryKeys();
   if (stale.length) await db.peers.bulkDelete(stale);
   return stale.length;
+}
+
+// ── Blocking ──────────────────────────────────────────────────────────────────
+
+export async function isBlocked(peerId) {
+  if (!peerId) return false;
+  return !!(await db.blocked.get(peerId));
+}
+
+export async function getBlocked() {
+  return db.blocked.orderBy("id").toArray();
+}
+
+// Block a peer: record them and wipe their presence (met-list entry + gossiped
+// items). Their incoming bundles are rejected from then on (see processMeshBundle).
+export async function blockPeer(peerId, name) {
+  if (!peerId) return;
+  await db.blocked.put({ id: peerId, name: name || "Unknown", ts: Date.now() });
+  await db.peers.delete(peerId).catch(() => {});
+}
+
+export async function unblockPeer(peerId) {
+  await db.blocked.delete(peerId);
+}
+
+// "Disconnect" — remove a peer's local data without permanently blocking them.
+// They can reappear if you sync again (unlike block).
+export async function removePeer(peerId) {
+  if (!peerId) return;
+  await db.peers.delete(peerId).catch(() => {});
+}
+
+// ── Buzz (nudge) ────────────────────────────────────────────────────────────
+
+const BUZZ_FRESH_MS = 60_000;   // include in outgoing bundles for this long
+const BUZZ_KEEP_MS  = 5 * 60_000; // then prune
+
+export async function addBuzz(toPeerId) {
+  if (!toPeerId) return;
+  await db.buzzes.add({ toPeerId, ts: Date.now() });
+  // opportunistic cleanup of old buzzes
+  const cutoff = Date.now() - BUZZ_KEEP_MS;
+  const old = await db.buzzes.where("ts").below(cutoff).primaryKeys();
+  if (old.length) await db.buzzes.bulkDelete(old);
+}
+
+// Recent buzzes to ride along in the outgoing bundle so peers receive them.
+export async function getRecentBuzzes() {
+  const cutoff = Date.now() - BUZZ_FRESH_MS;
+  return db.buzzes.where("ts").above(cutoff).toArray();
+}
+
+// ── Ratings (reputation) ──────────────────────────────────────────────────────
+
+export async function saveRating(rating) {
+  return db.ratings.put(rating); // idempotent on id
+}
+
+export async function getAllRatings() {
+  return db.ratings.toArray();
+}
+
+// Ratings to gossip in the outgoing bundle. We forward the freshest ones (ours
+// and others' we've collected) so reputation spreads even when a rater is offline.
+const RATINGS_BUNDLE_LIMIT = 150;
+export async function getRatingsForBundle() {
+  return db.ratings.orderBy("ts").reverse().limit(RATINGS_BUNDLE_LIMIT).toArray();
 }
 
 // ── Messages ────────────────────────────────────────────────────────────────

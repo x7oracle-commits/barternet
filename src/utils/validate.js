@@ -16,6 +16,9 @@ export const LIMITS = {
   OFFERS: 100,
   RESPONSES: 100,
   MESSAGES: 200,
+  BUZZES: 50,
+  RATINGS: 200,
+  COMMENT: 280,
   TITLE: 120,
   DESC: 1000,
   CATEGORY: 40,
@@ -129,6 +132,7 @@ export function validateBundle(raw, { allowImages = false } = {}) {
           id,
           name: str(p?.name, LIMITS.NAME) || "Anonymous",
           location: cleanLocation(p?.location),
+          avatar: str(p?.avatar, LIMITS.AVATAR) || undefined,
           pub: str(p?.pub, LIMITS.PUB) || undefined,
           items: cleanItems(p?.items, LIMITS.MESH_ITEMS, itemOpts),
         };
@@ -174,6 +178,38 @@ export function validateBundle(raw, { allowImages = false } = {}) {
         ts: num(m.ts) ?? Date.now(),
       } : null))
       .filter((m) => m && m.toPeerId && m.text);
+  }
+
+  if (Array.isArray(raw.buzzes)) {
+    clean.buzzes = clampArray(raw.buzzes, LIMITS.BUZZES)
+      .map((z) => (z && typeof z === "object" ? {
+        toPeerId: str(z.toPeerId, LIMITS.ID),
+        fromId: str(z.fromId, LIMITS.ID),
+        fromName: str(z.fromName, LIMITS.NAME),
+        ts: num(z.ts) ?? Date.now(),
+      } : null))
+      .filter((z) => z && z.toPeerId);
+  }
+
+  if (Array.isArray(raw.ratings)) {
+    clean.ratings = clampArray(raw.ratings, LIMITS.RATINGS)
+      .map((r) => {
+        if (!r || typeof r !== "object") return null;
+        const stars = num(r.stars);
+        return {
+          id: str(r.id, LIMITS.ID),
+          raterId: str(r.raterId, LIMITS.ID),
+          raterPub: str(r.raterPub, LIMITS.PUB),
+          ratedId: str(r.ratedId, LIMITS.ID),
+          tradeId: str(r.tradeId, LIMITS.ID),
+          stars: stars != null ? Math.max(1, Math.min(5, Math.round(stars))) : 0,
+          comment: str(r.comment, LIMITS.COMMENT),
+          ts: num(r.ts) ?? Date.now(),
+          sig: str(r.sig, LIMITS.SIG),
+        };
+      })
+      // Keep only structurally-complete ratings; signature is verified later.
+      .filter((r) => r && r.id && r.raterId && r.ratedId && r.raterPub && r.sig && r.stars >= 1);
   }
 
   return clean;

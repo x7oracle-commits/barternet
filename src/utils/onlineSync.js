@@ -8,6 +8,7 @@
 // We accept https:// (default) and derive wss://…/ws, or a ws(s):// URL directly.
 
 let transport = null;
+let pendingRegister = null; // { peerId, token } waiting to be sent to the relay
 
 const WS_HEARTBEAT_MS = 25_000; // re-announce our bundle so new joiners catch up
 const WS_BACKOFF_MS   = [1000, 2000, 5000, 10_000];
@@ -63,6 +64,12 @@ function createWsTransport(base, room, getBundle, onBundle, onError) {
     } catch { /* skip */ }
   };
 
+  // Send an arbitrary control message (push token registration / push request).
+  const sendRaw = (obj) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try { ws.send(JSON.stringify(obj)); return true; } catch { return false; }
+  };
+
   const connect = () => {
     if (stopped) return;
     let opened = false;
@@ -80,6 +87,8 @@ function createWsTransport(base, room, getBundle, onBundle, onError) {
       clearTimeout(openTimer);
       onError?.(null);
       send(); // announce ourselves immediately
+      // (Re)register our push token with the relay on every (re)connect.
+      if (pendingRegister) sendRaw({ type: "register", ...pendingRegister });
       heartbeat = setInterval(send, WS_HEARTBEAT_MS);
     };
 
@@ -107,6 +116,7 @@ function createWsTransport(base, room, getBundle, onBundle, onError) {
 
   return {
     push: send,
+    sendRaw,
     stop() {
       stopped = true;
       if (heartbeat) clearInterval(heartbeat);
@@ -139,6 +149,20 @@ export function stopOnlineSync() {
 // Push our latest bundle right now (called when local data changes).
 export function pushOnlineBundle() {
   transport?.push?.();
+}
+
+// Register this device's FCM token with the relay so it can push to us when the
+// app is backgrounded/closed. Remembered and re-sent on every reconnect.
+export function registerPushToken(peerId, fcmToken) {
+  if (!peerId || !fcmToken) return;
+  pendingRegister = { peerId, token: fcmToken };
+  transport?.sendRaw?.({ type: "register", ...pendingRegister });
+}
+
+// Ask the relay to send an FCM push to a peer (when we message/buzz/offer them).
+export function sendPushRequest(toPeerId, kind, fromName) {
+  if (!toPeerId) return;
+  transport?.sendRaw?.({ type: "push", toPeerId, kind, fromName });
 }
 
 export function isOnlineSyncRunning() {

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "597150115240",
+    "project_id": "barternet-a7b24",
+    "storage_bucket": "barternet-a7b24.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:597150115240:android:59312c0a8579118b6e699d",
+        "android_client_info": {
+          "package_name": "com.barternet.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBVNIq9mxmWJ9l383fMfzv4GeDkk0NkGOI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

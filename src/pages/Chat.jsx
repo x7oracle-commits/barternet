@@ -59,8 +59,9 @@ export default function Chat() {
     setText("");
     const fresh = await getMessagesWith(peerId);
     setMessages(fresh);
-    mesh?.bumpData?.();      // rebuild outgoing bundle so it includes this message
-    mesh?.refreshBundle?.(); // push to native advertiser immediately
+    mesh?.bumpData?.();        // rebuild outgoing bundle so it includes this message
+    mesh?.refreshBundle?.();   // push to native advertiser immediately
+    mesh?.notifyPush?.(peerId, "message"); // wake them via FCM if backgrounded
   }
 
   return (

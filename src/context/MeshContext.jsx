@@ -15,7 +15,8 @@ import {
   isNative, startMesh, stopMesh, updateMeshBundle,
   pullBundleFromPeer, approveSync,
 } from "../utils/nativeBluetooth.js";
-import { startOnlineSync, stopOnlineSync, pingServer, pushOnlineBundle } from "../utils/onlineSync.js";
+import { startOnlineSync, stopOnlineSync, pingServer, pushOnlineBundle, registerPushToken, sendPushRequest } from "../utils/onlineSync.js";
+import { initPush } from "../utils/push.js";
 import { DEFAULT_RELAY_URL, DEFAULT_ROOM } from "../config.js";
 import { useToast } from "../components/Toast.jsx";
 import { App as CapApp } from "@capacitor/app";
@@ -446,6 +447,18 @@ export function MeshProvider({ children }) {
     return () => { sub?.remove?.(); };
   }, []);
 
+  // Register for FCM push so the relay can wake us when the app is backgrounded.
+  // The token is sent to the relay; it re-sends automatically on every reconnect.
+  useEffect(() => {
+    initPush({
+      onToken: async (fcmToken) => {
+        const prof = await getProfile();
+        const uid = prof?.uid || prof?.id;
+        if (uid) registerPushToken(uid, fcmToken);
+      },
+    });
+  }, []);
+
   // Drop peers we haven't heard from recently (BLE walked out of range)
   useEffect(() => {
     if (!isNative()) return;
@@ -502,12 +515,20 @@ export function MeshProvider({ children }) {
     bumpData();
   }, [refreshStats, bumpData]);
 
+  // Ask the relay to push an FCM notification to a peer (so they're alerted even
+  // when their app is backgrounded/closed). No-op until FCM is configured.
+  const notifyPush = useCallback(async (toPeerId, kind) => {
+    const prof = await getProfile();
+    sendPushRequest(toPeerId, kind, prof?.name || "Someone");
+  }, []);
+
   // Send a buzz to a peer. bumpData rebuilds + pushes our bundle, carrying the
   // buzz to them over WebSocket (online) or the BLE advertiser (offline).
   const buzzPeer = useCallback(async (peerId) => {
     await addBuzz(peerId);
     bumpData();
-  }, [bumpData]);
+    notifyPush(peerId, "buzz");
+  }, [bumpData, notifyPush]);
 
   // Sign and store a reputation rating for a peer, then broadcast it.
   const submitRating = useCallback(async (ratedId, stars, tradeId, comment = "") => {
@@ -538,6 +559,8 @@ export function MeshProvider({ children }) {
     blockedPeers, blockPeer, unblockPeer, removePeer, buzzPeer,
     // reputation
     reputations, myReputation, submitRating,
+    // push
+    notifyPush,
   };
 
   return <MeshContext.Provider value={value}>{children}</MeshContext.Provider>;

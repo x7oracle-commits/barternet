@@ -72,9 +72,11 @@ export default function Market() {
       initiatedByMe: true,
     });
     toast("Offer created! It sends automatically next time you're near them.", "success");
+    const toPeerId = selectedItem._peerId;
     setSelectedItem(null);
     setOfferItemId("");
     mesh?.bumpData?.(); // refresh advertised bundle to include the new offer
+    mesh?.notifyPush?.(toPeerId, "offer"); // wake them via FCM if backgrounded
   }
 
   return (

@@ -1,7 +1,7 @@
 {
   "unstable": ["kv"],
   "tasks": {
-    "start": "deno run --allow-net --unstable-kv main.ts"
+    "start": "deno run --allow-net --allow-env --unstable-kv main.ts"
   },
   "deploy": {
     "entrypoint": "main.ts",
